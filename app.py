@@ -3,14 +3,12 @@ import pandas as pd
 
 from modules.dataloader import upload_dataset
 
-from modules.preprocessing import (
-    detect_missing_values,
-    handle_missing_values,
-    remove_duplicates,
-    encode_categorical,
-    scale_features,
-    split_dataset
-)
+from modules.preprocessing import (detect_missing_values,handle_missing_values,remove_duplicates,encode_categorical,scale_features,
+                                    split_dataset)
+
+from modules.model_training import (build_decision_tree_classifier,build_decision_tree_regressor,build_linear_regression,build_logistic_regression,
+                                    build_random_forest_classifier,build_random_forest_regressor,build_xgboost_classifier,build_xgboost_regressor,
+                                    detect_task_type)
 
 st.set_page_config(page_title="FairLens", layout="wide")
 
@@ -68,9 +66,9 @@ if df is not None:
     # Preprocess Button
     if st.button("Preprocess Dataset"):
 
-        # Show missing values
-        st.subheader("Missing Values")
-        st.write(detect_missing_values(df))
+        # Show missing values before handling
+        st.subheader("Missing Values Before Handling")
+        st.dataframe(detect_missing_values(df))
 
         # Handle missing values
         strategy_map = {
@@ -85,6 +83,10 @@ if df is not None:
             strategy_map[missing_strategy]
         )
 
+        # Show missing values after handling
+        st.subheader("Missing Values After Handling")
+        st.dataframe(detect_missing_values(df))
+
         # Remove duplicates
         before = len(df)
         df = remove_duplicates(df)
@@ -95,6 +97,11 @@ if df is not None:
         # Split features & target
         X = df.drop(columns=[target])
         y = df[target]
+
+        #detect task type
+        detected_task, detection_reason = detect_task_type(y)
+        st.session_state["detected_task"] = detected_task
+        st.session_state["detection_reason"] = detection_reason
 
         # Encode categorical columns
         encoding_map = {
@@ -137,3 +144,62 @@ if df is not None:
         st.session_state["y_train"] = y_train
         st.session_state["y_test"] = y_test
         st.session_state["sensitive_features"] = sensitive
+
+    # Model Training
+    if "X_train" in st.session_state and "detected_task" in st.session_state:
+        st.header("Model Training")
+        detected_task = st.session_state["detected_task"]
+        detection_reason = st.session_state["detection_reason"]
+        st.info(
+            f"FairLens detected: "
+            f"**{detected_task.capitalize()}**"
+        )
+        st.caption(f"Reason: {detection_reason}")
+        task_type = st.radio(
+            "Problem Type",
+            ["Classification", "Regression"],
+            index=(
+                0 if detected_task == "classification"
+                else 1
+            )
+        )
+
+        if task_type == "Classification":
+
+            algorithms = {
+                "Logistic Regression": build_logistic_regression,
+                "Decision Tree Classifier": build_decision_tree_classifier,
+                "Random Forest Classifier": build_random_forest_classifier,
+                "XGBoost Classifier": build_xgboost_classifier
+            }
+
+        else:
+
+            algorithms = {
+                "Linear Regression": build_linear_regression,
+                "Decision Tree Regressor": build_decision_tree_regressor,
+                "Random Forest Regressor": build_random_forest_regressor,
+                "XGBoost Regressor": build_xgboost_regressor
+            }
+
+        selected_algorithm = st.selectbox(
+            "Choose Algorithm",
+            list(algorithms.keys())
+        )
+
+        if st.button("Train Model"):
+
+            selected_function = algorithms[selected_algorithm]
+
+            model = selected_function(
+                st.session_state["X_train"],
+                st.session_state["y_train"]
+            )
+
+            st.session_state["trained_model"] = model
+            st.session_state["model_name"] = selected_algorithm
+            st.session_state["task_type"] = task_type
+
+            st.success(
+                f"{selected_algorithm} trained successfully!"
+            )

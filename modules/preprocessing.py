@@ -36,9 +36,10 @@ def handle_missing_values(df,strategy="mean"):
         for col in categorical:
                     df[col]=df[col].fillna(df[col].mode()[0])
 
-    elif strategy=="mode":
+    elif strategy == "mode":
         for col in df.columns:
-            df[col] = df[col].fillna(df[col].mode()[0])
+            if df[col].isnull().any():
+                df[col] = df[col].fillna(df[col].mode()[0])
 
     return df
 
