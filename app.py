@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from modules.dataloader import upload_dataset
 
@@ -9,6 +11,8 @@ from modules.preprocessing import (detect_missing_values,handle_missing_values,r
 from modules.model_training import (build_decision_tree_classifier,build_decision_tree_regressor,build_linear_regression,build_logistic_regression,
                                     build_random_forest_classifier,build_random_forest_regressor,build_xgboost_classifier,build_xgboost_regressor,
                                     detect_task_type)
+
+from modules.evaluation import evaluate_classification_models,evaluate_regression_models
 
 st.set_page_config(page_title="FairLens", layout="wide")
 
@@ -155,16 +159,9 @@ if df is not None:
             f"**{detected_task.capitalize()}**"
         )
         st.caption(f"Reason: {detection_reason}")
-        task_type = st.radio(
-            "Problem Type",
-            ["Classification", "Regression"],
-            index=(
-                0 if detected_task == "classification"
-                else 1
-            )
-        )
+        task_type = detected_task
 
-        if task_type == "Classification":
+        if task_type == "classification":
 
             algorithms = {
                 "Logistic Regression": build_logistic_regression,
@@ -203,3 +200,154 @@ if df is not None:
             st.success(
                 f"{selected_algorithm} trained successfully!"
             )
+
+        # Model Evaluation
+        if ("trained_model" in st.session_state and "X_test" in st.session_state and "y_test" in st.session_state):
+            st.header("Model Evaluation")
+            model = st.session_state["trained_model"]
+            X_test = st.session_state["X_test"]
+            y_test = st.session_state["y_test"]
+            task_type = st.session_state["task_type"]
+
+            if st.button("Evaluate Model"):
+                if task_type == "classification":
+                    results = evaluate_classification_models(
+                        model,
+                        X_test,
+                        y_test
+                    )
+
+                    st.session_state["evaluation_results"] = results
+                    st.success(
+                        "Classification evaluation completed successfully!"
+                    )
+                    # ------------------------------------------
+                    # Main Metrics
+                    # ------------------------------------------
+
+                    st.subheader("Classification Performance")
+                    col1, col2, col3, col4, col5 = st.columns(5)
+                    col1.metric("Accuracy", f"{results['accuracy']:.4f}")
+                    col2.metric("Precision",f"{results['precision']:.4f}")
+                    col3.metric("Recall",f"{results['recall_score']:.4f}")
+                    col4.metric("F1 Score", f"{results['f1_score']:.4f}")
+                    if results["ROC-AUC"] is not None:
+                        col5.metric(
+                            "ROC-AUC",
+                            f"{results['ROC-AUC']:.4f}"
+                        )
+                    else:
+                        col5.metric(
+                            "ROC-AUC",
+                            "N/A"
+                        )
+                    # ------------------------------------------
+                    # Confusion Matrix + Classification Report
+                    # ------------------------------------------
+                    left, right = st.columns(2)
+                    # ==========================================
+                    # LEFT: Confusion Matrix
+                    # ==========================================
+                    with left:
+                        st.subheader("Confusion Matrix")
+                        cm = results["confusion_matrix"]
+                        labels = results["Labels"]
+                        fig, ax = plt.subplots(figsize=(4, 3))
+                        sns.heatmap(
+                            cm,
+                            annot=True,
+                            fmt="d",
+                            cmap="Blues",
+                            cbar=False,
+                            xticklabels=labels,
+                            yticklabels=labels,
+                            annot_kws={"size": 11},
+                            ax=ax
+                        )
+
+                        ax.set_xlabel("Predicted",fontsize=9)
+                        ax.set_ylabel( "Actual",fontsize=9)
+                        ax.set_title("Confusion Matrix",fontsize=11)
+                        ax.tick_params(axis="both",labelsize=8)
+                        st.pyplot(
+                            fig,
+                            use_container_width=False
+                        )
+                        plt.close(fig)
+
+                    # ==========================================
+                    # RIGHT: Classification Report
+                    # ==========================================
+
+                    with right:
+
+                        st.subheader("Classification Report")
+
+                        report = results["classification_report"]
+
+                        report_df = pd.DataFrame(report).T
+
+                        # Keep only useful columns
+                        report_df = report_df[
+                            ["precision", "recall", "f1-score", "support"]
+                        ]
+
+                        # Rename columns for display
+                        report_df.columns = [
+                            "Precision",
+                            "Recall",
+                            "F1 Score",
+                            "Support"
+                        ]
+
+                        # Format values
+                        report_df["Precision"] = report_df[
+                            "Precision"
+                        ].apply(
+                            lambda x: f"{x:.3f}"
+                        )
+
+                        report_df["Recall"] = report_df[
+                            "Recall"
+                        ].apply(
+                            lambda x: f"{x:.3f}"
+                        )
+
+                        report_df["F1 Score"] = report_df[
+                            "F1 Score"
+                        ].apply(
+                            lambda x: f"{x:.3f}"
+                        )
+
+                        report_df["Support"] = report_df[
+                            "Support"
+                        ].astype(int)
+
+                        st.dataframe(
+                            report_df,
+                            use_container_width=True
+                        )
+                # -----------------------------
+                # Regression Evaluation
+                # -----------------------------
+
+                else:
+                    results = evaluate_regression_models( model,X_test,y_test)
+                    st.session_state["evaluation_results"] = results
+                    st.success("Regression evaluation completed successfully!")
+                    st.subheader("Regression Performance")
+                    metric_names = [
+                        "mae",
+                        "mse",
+                        "rmse",
+                        "r2_score"
+                    ]
+                    cols = st.columns(
+                        len(metric_names)
+                    )
+
+                    for col, metric in zip(cols,metric_names):
+                        col.metric(
+                            label=metric,
+                            value=f"{float(results[metric]):.4f}"
+                        )

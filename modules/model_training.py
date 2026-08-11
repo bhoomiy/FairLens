@@ -59,11 +59,9 @@ def build_xgboost_classifier(X_train,y_train):
     return model,encoder
 
 def build_xgboost_regressor(X_train,y_train):
-    encoder = LabelEncoder()
-    y_encoded = encoder.fit_transform(y_train)
     model=xgb.XGBRegressor(n_estimators=100,max_depth=3,eval_metric="logloss",random_state=42,learning_rate=0.1)
-    model.fit(X_train,y_encoded)
-    return model,encoder
+    model.fit(X_train,y_train)
+    return model
 
 
 
