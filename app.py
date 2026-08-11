@@ -14,6 +14,8 @@ from modules.model_training import (build_decision_tree_classifier,build_decisio
 
 from modules.evaluation import evaluate_classification_models,evaluate_regression_models
 
+from modules.bias_detection import evaluate_fairness
+
 st.set_page_config(page_title="FairLens", layout="wide")
 
 st.title("FairLens: Bias Auditing Toolkit")
@@ -94,6 +96,7 @@ if df is not None:
         # Remove duplicates
         before = len(df)
         df = remove_duplicates(df)
+        st.session_state["processed_df"] = df.copy()
         after = len(df)
 
         st.write(f"Duplicate rows removed: {before-after}")
@@ -351,3 +354,268 @@ if df is not None:
                             label=metric,
                             value=f"{float(results[metric]):.4f}"
                         )
+
+        # ============================================================
+        # FAIRNESS EVALUATION
+        # ============================================================
+
+        if (
+            "trained_model" in st.session_state
+            and "X_test" in st.session_state
+            and "y_test" in st.session_state
+            and "processed_df" in st.session_state
+            and "sensitive_features" in st.session_state
+        ):
+
+            st.header("Fairness Evaluation")
+
+            # Get stored data
+            model = st.session_state["trained_model"]
+            X_test = st.session_state["X_test"]
+            y_test = st.session_state["y_test"]
+            processed_df = st.session_state["processed_df"]
+            sensitive_features = st.session_state["sensitive_features"]
+            task_type = st.session_state["task_type"]
+
+            # Check whether sensitive features were selected
+            if not sensitive_features:
+
+                st.warning(
+                    "No sensitive features selected. "
+                    "Please select at least one sensitive feature."
+                )
+
+            else:
+
+                st.write(
+                    "**Sensitive Features:**",
+                    ", ".join(sensitive_features)
+                )
+
+                if st.button("Evaluate Fairness"):
+
+                    # ==================================================
+                    # Generate Predictions
+                    # ==================================================
+
+                    y_pred = model.predict(X_test)
+
+                    # ==================================================
+                    # Get Original Sensitive Feature Values
+                    # ==================================================
+
+                    sensitive_test = processed_df.loc[
+                        X_test.index,
+                        sensitive_features
+                    ]
+
+                    # ==================================================
+                    # Run Fairness Engine
+                    # ==================================================
+
+                    fairness_results = evaluate_fairness(
+                        y_true=y_test,
+                        y_pred=y_pred,
+                        dataframe=sensitive_test,
+                        sensitive_features=sensitive_features,
+                        task_type=task_type
+                    )
+
+                    # Store results
+                    st.session_state["fairness_results"] = fairness_results
+
+                    st.success(
+                        "Fairness evaluation completed successfully!"
+                    )
+
+                    # ==================================================
+                    # DISPLAY RESULTS FOR EACH SENSITIVE FEATURE
+                    # ==================================================
+
+                    for feature, result in fairness_results.items():
+
+                        st.subheader(
+                            f"Fairness Analysis: {feature}"
+                        )
+
+                        metrics = result["metrics"]
+                        bias_result = result["bias_detection"]
+
+                        # ==================================================
+                        # CLASSIFICATION
+                        # ==================================================
+
+                        if task_type == "classification":
+
+                            st.write("### Fairness Metrics")
+
+                            col1, col2, col3 = st.columns(3)
+
+                            col1.metric(
+                                "Demographic Parity Difference",
+                                f"{metrics['Demographic Parity Difference']:.4f}"
+                            )
+
+                            col2.metric(
+                                "Disparate Impact",
+                                f"{metrics['Disparate Impact']:.4f}"
+                            )
+
+                            col3.metric(
+                                "Equal Opportunity Difference",
+                                f"{metrics['Equal Opportunity Difference']:.4f}"
+                            )
+
+                            # ----------------------------------------------
+                            # Accuracy by Group
+                            # ----------------------------------------------
+
+                            st.write("### Accuracy by Group")
+
+                            accuracy_data = []
+
+                            for group, accuracy in metrics[
+                                "Group Accuracy"
+                            ].items():
+
+                                accuracy_data.append({
+                                    "Group": group,
+                                    "Accuracy": round(accuracy, 4)
+                                })
+
+                            accuracy_df = pd.DataFrame(
+                                accuracy_data
+                            )
+
+                            st.dataframe(
+                                accuracy_df,
+                                use_container_width=True
+                            )
+
+                        # ==================================================
+                        # REGRESSION
+                        # ==================================================
+
+                        else:
+
+                            st.write("### Fairness Metrics")
+
+                            col1, col2, col3 = st.columns(3)
+
+                            # ----------------------------------------------
+                            # Mean Prediction Difference
+                            # ----------------------------------------------
+
+                            col1.metric(
+                                "Mean Prediction Difference",
+                                f"{metrics['Mean Prediction Difference']:.4f}"
+                            )
+
+                            # ----------------------------------------------
+                            # MAE
+                            # ----------------------------------------------
+
+                            mae_values = list(
+                                metrics["Group MAE"].values()
+                            )
+
+                            if len(mae_values) >= 2:
+
+                                mae_difference = (
+                                    max(mae_values)
+                                    - min(mae_values)
+                                )
+
+                            else:
+
+                                mae_difference = 0.0
+
+                            col2.metric(
+                                "MAE Difference",
+                                f"{mae_difference:.4f}"
+                            )
+
+                            # ----------------------------------------------
+                            # RMSE
+                            # ----------------------------------------------
+
+                            rmse_values = list(
+                                metrics["Group RMSE"].values()
+                            )
+
+                            if len(rmse_values) >= 2:
+
+                                rmse_difference = (
+                                    max(rmse_values)
+                                    - min(rmse_values)
+                                )
+
+                            else:
+
+                                rmse_difference = 0.0
+
+                            col3.metric(
+                                "RMSE Difference",
+                                f"{rmse_difference:.4f}"
+                            )
+
+                            # ----------------------------------------------
+                            # Error by Group
+                            # ----------------------------------------------
+
+                            st.write("### Error by Group")
+
+                            regression_data = []
+
+                            groups = metrics["Group MAE"].keys()
+
+                            for group in groups:
+
+                                regression_data.append({
+                                    "Group": group,
+                                    "MAE": round(
+                                        metrics["Group MAE"][group],
+                                        4
+                                    ),
+                                    "RMSE": round(
+                                        metrics["Group RMSE"][group],
+                                        4
+                                    )
+                                })
+
+                            regression_df = pd.DataFrame(
+                                regression_data
+                            )
+
+                            st.dataframe(
+                                regression_df,
+                                use_container_width=True
+                            )
+
+                        # ==================================================
+                        # BIAS DETECTION RESULT
+                        # ==================================================
+
+                        st.write("### Bias Detection")
+
+                        if bias_result["bias_detected"]:
+
+                            st.error(
+                                "Potential Bias Detected"
+                            )
+
+                            st.write("**Reasons:**")
+
+                            for reason in bias_result["reasons"]:
+
+                                st.write(
+                                    f"- {reason}"
+                                )
+
+                        else:
+
+                            st.success(
+                                "No Significant Bias Detected"
+                            )
+
+                        st.divider()
