@@ -16,6 +16,8 @@ from modules.evaluation import evaluate_classification_models,evaluate_regressio
 
 from modules.bias_detection import evaluate_fairness
 
+from modules.explainability import explain_model,create_shap_summary_plot,create_local_explanation
+
 st.set_page_config(page_title="FairLens", layout="wide")
 
 st.title("FairLens: Bias Auditing Toolkit")
@@ -619,3 +621,134 @@ if df is not None:
                             )
 
                         st.divider()
+
+        # ============================================================
+        # EXPLAINABILITY
+        # ============================================================
+
+        if (
+            "trained_model" in st.session_state
+            and "X_train" in st.session_state
+            and "X_test" in st.session_state
+        ):
+
+            st.header("Model Explainability")
+
+            model = st.session_state["trained_model"]
+            X_train = st.session_state["X_train"]
+            X_test = st.session_state["X_test"]
+
+            if st.button("Generate SHAP Explanation"):
+
+                with st.spinner("Generating SHAP explanations..."):
+
+                    try:
+
+                        explanation_results = explain_model(
+                            model,
+                            X_train,
+                            X_test
+                        )
+
+                        st.session_state[
+                            "explanation_results"
+                        ] = explanation_results
+
+                        st.success(
+                            "SHAP explanation generated successfully!"
+                        )
+
+                    except Exception as e:
+
+                        st.error(
+                            f"Unable to generate SHAP explanation: {e}"
+                        )
+
+            # ========================================================
+            # DISPLAY EXPLANATIONS
+            # ========================================================
+
+            if "explanation_results" in st.session_state:
+
+                results = st.session_state[
+                    "explanation_results"
+                ]
+
+                shap_values = results["shap_values"]
+                feature_importance = results[
+                    "feature_importance"
+                ]
+
+                # ====================================================
+                # SHAP FEATURE IMPORTANCE
+                # ====================================================
+
+                st.subheader("SHAP Feature Importance")
+
+                st.dataframe(
+                    feature_importance,
+                    use_container_width=True
+                )
+
+                # ====================================================
+                # SHAP SUMMARY PLOT
+                # ====================================================
+
+                st.subheader("SHAP Summary Plot")
+
+                try:
+
+                    summary_fig = create_shap_summary_plot(
+                        shap_values,
+                        X_test
+                    )
+
+                    st.pyplot(
+                        summary_fig,
+                        use_container_width=True
+                    )
+
+                    plt.close(summary_fig)
+
+                except Exception as e:
+
+                    st.error(
+                        f"Unable to generate SHAP summary plot: {e}"
+                    )
+
+                # ====================================================
+                # LOCAL EXPLANATION
+                # ====================================================
+
+                st.subheader("SHAP Local Explanation")
+
+                sample_index = st.number_input(
+                    "Select test sample",
+                    min_value=0,
+                    max_value=len(X_test) - 1,
+                    value=0,
+                    step=1
+                )
+
+                if st.button("Explain Selected Prediction"):
+
+                    try:
+
+                        local_fig = create_local_explanation(
+                            shap_values,
+                            X_test,
+                            int(sample_index)
+                        )
+
+                        st.pyplot(
+                            local_fig,
+                            use_container_width=True
+                        )
+
+                        plt.close(local_fig)
+
+                    except Exception as e:
+
+                        st.error(
+                            f"Unable to generate local explanation: {e}"
+                        )
