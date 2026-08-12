@@ -2,21 +2,20 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.metrics import accuracy_score,mean_absolute_error,mean_squared_error
 
 from modules.dataloader import upload_dataset
-
 from modules.preprocessing import (detect_missing_values,handle_missing_values,remove_duplicates,encode_categorical,scale_features,
                                     split_dataset)
-
 from modules.model_training import (build_decision_tree_classifier,build_decision_tree_regressor,build_linear_regression,build_logistic_regression,
                                     build_random_forest_classifier,build_random_forest_regressor,build_xgboost_classifier,build_xgboost_regressor,
                                     detect_task_type)
-
 from modules.evaluation import evaluate_classification_models,evaluate_regression_models
-
 from modules.bias_detection import evaluate_fairness
-
 from modules.explainability import explain_model,create_shap_summary_plot,create_local_explanation
+from modules.recommendation import generate_recommendations
+from modules.bias_mitigation import (calculate_reweighing_weights,apply_reweighing,apply_exponentiated_gradient,apply_threshold_optimizer)
+from fairlearn.reductions import ExponentiatedGradient, DemographicParity
 
 st.set_page_config(page_title="FairLens", layout="wide")
 
@@ -153,6 +152,14 @@ if df is not None:
         st.session_state["y_train"] = y_train
         st.session_state["y_test"] = y_test
         st.session_state["sensitive_features"] = sensitive
+
+        # Store sensitive feature values for training data
+        sensitive_train = df.loc[
+            X_train.index,
+            sensitive
+        ]
+
+        st.session_state["sensitive_train"] = sensitive_train
 
     # Model Training
     if "X_train" in st.session_state and "detected_task" in st.session_state:
@@ -410,6 +417,8 @@ if df is not None:
                         X_test.index,
                         sensitive_features
                     ]
+
+                    st.session_state["sensitive_test"] = sensitive_test
 
                     # ==================================================
                     # Run Fairness Engine
@@ -752,3 +761,777 @@ if df is not None:
                         st.error(
                             f"Unable to generate local explanation: {e}"
                         )
+
+        # ============================================================
+        # RECOMMENDATION ENGINE
+        # ============================================================
+
+        if "fairness_results" in st.session_state:
+
+            fairness_results = st.session_state["fairness_results"]
+            
+            task_type = st.session_state["task_type"]
+
+            sensitive_test = st.session_state["sensitive_test"]
+            st.session_state["sensitive_test"] = sensitive_test
+
+            recommendations = generate_recommendations(
+                fairness_results,
+                sensitive_test,
+                task_type,
+                can_retrain=True,
+                predictions_only=False
+            )
+
+            # Store recommendations
+            st.session_state["recommendations"] = recommendations
+
+            st.header("Recommendation Engine")
+
+            for feature, recommendation in recommendations.items():
+
+                st.subheader(
+                    f"Sensitive Feature: {feature}"
+                )
+
+                # -------------------------------
+                # Group Distribution
+                # -------------------------------
+
+                st.markdown("### Group Distribution")
+
+                distribution = recommendation[
+                    "group_distribution"
+                ]
+
+                distribution_df = pd.DataFrame({
+                    "Group": distribution.index,
+                    "Proportion": [
+                        f"{value * 100:.2f}%"
+                        for value in distribution.values
+                    ]
+                })
+
+                st.dataframe(
+                    distribution_df,
+                    use_container_width=True
+                )
+
+                # -------------------------------
+                # Prediction Bias
+                # -------------------------------
+
+                if recommendation["bias_detected"]:
+
+                    st.error("Bias detected.")
+
+                    st.markdown("### Recommended Strategy")
+
+                    st.success(
+                        f"✓ {recommendation['strategy']}"
+                    )
+
+                    st.markdown("### Reason")
+
+                    st.write(
+                        recommendation["reason"]
+                    )
+
+                # -------------------------------
+                # Dataset Imbalance
+                # -------------------------------
+
+                elif recommendation["group_imbalance"]:
+
+                    st.warning(
+                        "Dataset imbalance detected."
+                    )
+
+                    st.markdown("### Recommended Strategy")
+
+                    st.success("✓ Reweighing")
+
+                    st.markdown("### Reason")
+
+                    st.write(
+                        "One or more sensitive groups are "
+                        "underrepresented in the dataset."
+                    )
+
+                else:
+
+                    st.success(
+                        "No significant prediction bias "
+                        "or group imbalance detected."
+                    )
+        # ============================================================
+        # BIAS MITIGATION
+        # ============================================================
+
+        st.header("Bias Mitigation")
+
+        if "recommendations" in st.session_state:
+
+            recommendations = st.session_state["recommendations"]
+
+            # Find features where mitigation is recommended
+            mitigation_features = []
+
+            for feature, recommendation in recommendations.items():
+
+                if (
+                    recommendation.get("group_imbalance", False)
+                    or recommendation.get("bias_detected", False)
+                ):
+                    mitigation_features.append(feature)
+
+            if mitigation_features:
+
+                st.warning(
+                    "Bias mitigation is recommended for the following "
+                    "sensitive feature(s):"
+                )
+
+                st.write(
+                    ", ".join(mitigation_features)
+                )
+
+                selected_feature = st.selectbox(
+                    "Select sensitive feature for mitigation",
+                    mitigation_features
+                )
+
+                task_type = st.session_state["task_type"]
+
+                # --------------------------------------------------------
+                # Classification
+                # --------------------------------------------------------
+
+                if task_type == "classification":
+
+                    mitigation_method = st.selectbox(
+                        "Select Mitigation Method",
+                        [
+                            "Reweighing",
+                            "Exponentiated Gradient",
+                            "Threshold Optimizer"
+                        ]
+                    )
+
+                    # ====================================================
+                    # REWEIGHING
+                    # ====================================================
+
+                    if mitigation_method == "Reweighing":
+
+                        if st.button("Apply Reweighing"):
+
+                            try:
+
+                                from sklearn.base import clone
+
+                                model = st.session_state[
+                                    "trained_model"
+                                ]
+
+                                X_train = st.session_state[
+                                    "X_train"
+                                ]
+
+                                y_train = st.session_state[
+                                    "y_train"
+                                ]
+
+                                X_test = st.session_state[
+                                    "X_test"
+                                ]
+
+                                sensitive_train = st.session_state[
+                                    "sensitive_train"
+                                ]
+
+                                sensitive_values = (
+                                    sensitive_train[
+                                        selected_feature
+                                    ]
+                                )
+
+                                # Create separate copy
+                                mitigated_model = clone(model)
+
+                                # Apply Reweighing
+                                mitigated_model = apply_reweighing(
+                                    mitigated_model,
+                                    X_train,
+                                    y_train,
+                                    sensitive_values
+                                )
+
+                                # Generate predictions
+                                mitigated_predictions = (
+                                    mitigated_model.predict(
+                                        X_test
+                                    )
+                                )
+
+                                # Store results
+                                st.session_state[
+                                    "mitigated_model"
+                                ] = mitigated_model
+
+                                st.session_state[
+                                    "mitigated_predictions"
+                                ] = mitigated_predictions
+
+                                st.session_state[
+                                    "mitigation_feature"
+                                ] = selected_feature
+
+                                st.session_state[
+                                    "mitigation_method"
+                                ] = "Reweighing"
+
+                                st.success(
+                                    "Reweighing applied successfully!"
+                                )
+
+                            except Exception as e:
+
+                                st.error(
+                                    f"Reweighing failed: {e}"
+                                )
+
+                    # ====================================================
+                    # EXPONENTIATED GRADIENT
+                    # ====================================================
+
+                    elif mitigation_method == "Exponentiated Gradient":
+
+                        if st.button(
+                            "Apply Exponentiated Gradient"
+                        ):
+
+                            try:
+
+                                model = st.session_state[
+                                    "trained_model"
+                                ]
+
+                                X_train = st.session_state[
+                                    "X_train"
+                                ]
+
+                                y_train = st.session_state[
+                                    "y_train"
+                                ]
+
+                                X_test = st.session_state[
+                                    "X_test"
+                                ]
+
+                                sensitive_train = st.session_state[
+                                    "sensitive_train"
+                                ]
+
+                                sensitive_values = (
+                                    sensitive_train[
+                                        selected_feature
+                                    ]
+                                )
+
+                                with st.spinner(
+                                    "Applying Exponentiated "
+                                    "Gradient..."
+                                ):
+
+                                    mitigated_model, label_encoder = (
+                                        apply_exponentiated_gradient(
+                                            model,
+                                            X_train,
+                                            y_train,
+                                            sensitive_values
+                                        )
+                                    )
+
+                                # Generate encoded predictions
+                                mitigated_predictions_encoded = (
+                                    mitigated_model.predict(
+                                        X_test
+                                    )
+                                )
+
+                                # Convert predictions back to original labels
+                                mitigated_predictions = (
+                                    label_encoder.inverse_transform(
+                                        mitigated_predictions_encoded
+                                    )
+                                )
+
+                                # Store results
+                                st.session_state[
+                                    "mitigated_model"
+                                ] = mitigated_model
+
+                                st.session_state[
+                                    "mitigated_predictions"
+                                ] = mitigated_predictions
+
+                                st.session_state[
+                                    "mitigation_feature"
+                                ] = selected_feature
+
+                                st.session_state[
+                                    "mitigation_method"
+                                ] = "Exponentiated Gradient"
+
+                                st.session_state[
+                                    "eg_label_encoder"
+                                ] = label_encoder
+
+                                st.success(
+                                    "Exponentiated Gradient "
+                                    "applied successfully!"
+                                )
+
+                            except Exception as e:
+
+                                st.error(
+                                    f"Exponentiated Gradient "
+                                    f"failed: {e}"
+                                )
+
+                    # ====================================================
+                    # THRESHOLD OPTIMIZER
+                    # ====================================================
+
+                    else:
+
+                        if st.button("Apply Threshold Optimizer"):
+
+                            try:
+
+                                model = st.session_state[
+                                    "trained_model"
+                                ]
+
+                                X_train = st.session_state[
+                                    "X_train"
+                                ]
+
+                                y_train = st.session_state[
+                                    "y_train"
+                                ]
+
+                                X_test = st.session_state[
+                                    "X_test"
+                                ]
+
+                                sensitive_train = st.session_state[
+                                    "sensitive_train"
+                                ]
+
+                                # Sensitive feature used during fitting
+                                sensitive_values = (
+                                    sensitive_train[
+                                        selected_feature
+                                    ]
+                                )
+
+                                # Get test sensitive values
+                                processed_df = st.session_state[
+                                    "processed_df"
+                                ]
+
+                                sensitive_test = processed_df.loc[
+                                    X_test.index,
+                                    st.session_state["sensitive_features"]
+                                ]
+
+                                with st.spinner(
+                                    "Applying Threshold Optimizer..."
+                                ):
+
+                                    mitigated_model,label_encoder = (
+                                        apply_threshold_optimizer(
+                                            model,
+                                            X_train,
+                                            y_train,
+                                            sensitive_values
+                                        )
+                                    )
+
+                                # Generate fairness-aware predictions
+                                mitigated_predictions_encoded = (
+                                    mitigated_model.predict(
+                                        X_test,
+                                        sensitive_features=sensitive_test
+                                    )
+                                )
+
+                                mitigated_predictions = (
+                                    label_encoder.inverse_transform(
+                                        mitigated_predictions_encoded
+                                    )
+                                )
+
+                                # Store results
+                                st.session_state[
+                                    "mitigated_model"
+                                ] = mitigated_model
+
+                                st.session_state[
+                                    "mitigated_predictions"
+                                ] = mitigated_predictions
+
+                                st.session_state[
+                                    "mitigation_feature"
+                                ] = selected_feature
+
+                                st.session_state[
+                                    "mitigation_method"
+                                ] = "Threshold Optimizer"
+
+                                # Store sensitive test values
+                                st.session_state[
+                                    "sensitive_test"
+                                ] = sensitive_test
+
+                                st.success(
+                                    "Threshold Optimizer "
+                                    "applied successfully!"
+                                )
+
+                            except Exception as e:
+
+                                st.error(
+                                    f"Threshold Optimizer failed: {e}"
+                                )
+
+
+                # --------------------------------------------------------
+                # Regression
+                # --------------------------------------------------------
+
+                else:
+
+                    st.info(
+                        "Regression mitigation currently uses "
+                        "Reweighing."
+                    )
+
+                    if st.button("Apply Reweighing"):
+
+                        try:
+
+                            from sklearn.base import clone
+
+                            model = st.session_state[
+                                "trained_model"
+                            ]
+
+                            X_train = st.session_state[
+                                "X_train"
+                            ]
+
+                            y_train = st.session_state[
+                                "y_train"
+                            ]
+
+                            X_test = st.session_state[
+                                "X_test"
+                            ]
+
+                            sensitive_train = st.session_state[
+                                "sensitive_train"
+                            ]
+
+                            sensitive_values = (
+                                sensitive_train[
+                                    selected_feature
+                                ]
+                            )
+
+                            mitigated_model = clone(model)
+
+                            mitigated_model = apply_reweighing(
+                                mitigated_model,
+                                X_train,
+                                y_train,
+                                sensitive_values
+                            )
+
+                            mitigated_predictions = (
+                                mitigated_model.predict(
+                                    X_test
+                                )
+                            )
+
+                            st.session_state[
+                                "mitigated_model"
+                            ] = mitigated_model
+
+                            st.session_state[
+                                "mitigated_predictions"
+                            ] = mitigated_predictions
+
+                            st.session_state[
+                                "mitigation_feature"
+                            ] = selected_feature
+
+                            st.session_state[
+                                "mitigation_method"
+                            ] = "Reweighing"
+
+                            st.success(
+                                "Reweighing applied successfully!"
+                            )
+
+                        except Exception as e:
+
+                            st.error(
+                                f"Reweighing failed: {e}"
+                            )
+
+            else:
+
+                st.info(
+                    "No mitigation strategy is currently recommended."
+                )
+
+        else:
+
+            st.info(
+                "Run the Recommendation Engine first."
+            )
+
+        # ============================================================
+        # MITIGATION EVALUATION
+        # ============================================================
+
+        if (
+            "mitigated_predictions" in st.session_state
+            and "trained_model" in st.session_state
+            and "X_test" in st.session_state
+            and "y_test" in st.session_state
+            and "sensitive_test" in st.session_state
+        ):
+
+            st.header("Mitigation Evaluation")
+
+            original_model = st.session_state["trained_model"]
+            mitigated_predictions = st.session_state[
+                "mitigated_predictions"
+            ]
+
+            X_test = st.session_state["X_test"]
+            y_test = st.session_state["y_test"]
+            sensitive_test = st.session_state["sensitive_test"]
+            sensitive_features = st.session_state["sensitive_features"]
+            task_type = st.session_state["task_type"]
+
+            # Original predictions
+            original_predictions = original_model.predict(X_test)
+
+            # ========================================================
+            # FAIRNESS COMPARISON
+            # ========================================================
+
+            st.subheader("Fairness Comparison")
+
+            original_results = evaluate_fairness(
+                y_test,
+                original_predictions,
+                sensitive_test,
+                sensitive_features,
+                task_type
+            )
+
+            mitigated_results = evaluate_fairness(
+                y_test,
+                mitigated_predictions,
+                sensitive_test,
+                sensitive_features,
+                task_type
+            )
+
+            for feature in original_results:
+
+                st.markdown(
+                    f"### Sensitive Feature: {feature}"
+                )
+
+                original_metrics = original_results[
+                    feature
+                ]["metrics"]
+
+                mitigated_metrics = mitigated_results[
+                    feature
+                ]["metrics"]
+
+                # ----------------------------------------------------
+                # Classification
+                # ----------------------------------------------------
+
+                if task_type == "classification":
+
+                    comparison = pd.DataFrame({
+
+                        "Metric": [
+                            "Demographic Parity Difference",
+                            "Disparate Impact",
+                            "Equal Opportunity Difference"
+                        ],
+
+                        "Before Mitigation": [
+                            original_metrics[
+                                "Demographic Parity Difference"
+                            ],
+
+                            original_metrics[
+                                "Disparate Impact"
+                            ],
+
+                            original_metrics[
+                                "Equal Opportunity Difference"
+                            ]
+                        ],
+
+                        "After Mitigation": [
+                            mitigated_metrics[
+                                "Demographic Parity Difference"
+                            ],
+
+                            mitigated_metrics[
+                                "Disparate Impact"
+                            ],
+
+                            mitigated_metrics[
+                                "Equal Opportunity Difference"
+                            ]
+                        ]
+                    })
+
+                # ----------------------------------------------------
+                # Regression
+                # ----------------------------------------------------
+
+                else:
+
+                    comparison = pd.DataFrame({
+
+                        "Metric": [
+                            "Group MAE",
+                            "Group RMSE",
+                            "Mean Prediction Difference"
+                        ],
+
+                        "Before Mitigation": [
+                            original_metrics["Group MAE"],
+                            original_metrics["Group RMSE"],
+                            original_metrics[
+                                "Mean Prediction Difference"
+                            ]
+                        ],
+
+                        "After Mitigation": [
+                            mitigated_metrics["Group MAE"],
+                            mitigated_metrics["Group RMSE"],
+                            mitigated_metrics[
+                                "Mean Prediction Difference"
+                            ]
+                        ]
+                    })
+
+                st.dataframe(
+                    comparison,
+                    use_container_width=True
+                )
+
+            # ========================================================
+            # MODEL PERFORMANCE COMPARISON
+            # ========================================================
+
+            st.subheader("Model Performance Comparison")
+
+            if task_type == "classification":
+
+                original_accuracy = accuracy_score(
+                    y_test,
+                    original_predictions
+                )
+
+                mitigated_accuracy = accuracy_score(
+                    y_test,
+                    mitigated_predictions
+                )
+
+                performance_df = pd.DataFrame({
+
+                    "Metric": [
+                        "Accuracy"
+                    ],
+
+                    "Before Mitigation": [
+                        original_accuracy
+                    ],
+
+                    "After Mitigation": [
+                        mitigated_accuracy
+                    ]
+                })
+
+            else:
+
+                original_mae = mean_absolute_error(
+                    y_test,
+                    original_predictions
+                )
+
+                mitigated_mae = mean_absolute_error(
+                    y_test,
+                    mitigated_predictions
+                )
+
+                original_rmse = np.sqrt(
+                    mean_squared_error(
+                        y_test,
+                        original_predictions
+                    )
+                )
+
+                mitigated_rmse = np.sqrt(
+                    mean_squared_error(
+                        y_test,
+                        mitigated_predictions
+                    )
+                )
+
+                performance_df = pd.DataFrame({
+
+                    "Metric": [
+                        "MAE",
+                        "RMSE"
+                    ],
+
+                    "Before Mitigation": [
+                        original_mae,
+                        original_rmse
+                    ],
+
+                    "After Mitigation": [
+                        mitigated_mae,
+                        mitigated_rmse
+                    ]
+                })
+
+            st.dataframe(
+                performance_df,
+                use_container_width=True
+            )
+
+        else:
+
+            st.info(
+                "Apply a mitigation strategy to view "
+                "the before vs after comparison."
+            )

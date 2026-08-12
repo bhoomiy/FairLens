@@ -75,5 +75,25 @@ def scale_features(df,method="standard"):
     df[numerical] = scaler.fit_transform(df[numerical])
     return df, scaler
 
-def split_dataset(X,y,test_size=0.2,random_state=42):
-     return train_test_split(X,y,test_size=test_size,random_state=random_state,stratify=y)
+def split_dataset(
+    X,
+    y,
+    test_size=0.2,
+    random_state=42
+):
+
+    # Check whether stratification is possible
+    class_counts = y.value_counts()
+
+    if class_counts.min() >= 2:
+        stratify_value = y
+    else:
+        stratify_value = None
+
+    return train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=stratify_value
+    )
