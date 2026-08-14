@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 from sklearn.metrics import accuracy_score,mean_absolute_error,mean_squared_error
+import joblib
+import os
 
 from modules.dataloader import upload_dataset
 from modules.preprocessing import (detect_missing_values,handle_missing_values,remove_duplicates,encode_categorical,scale_features,
@@ -100,6 +102,7 @@ if df is not None:
         before = len(df)
         df = remove_duplicates(df)
         st.session_state["processed_df"] = df.copy()
+        st.session_state["target_column"] = target
         after = len(df)
 
         st.write(f"Duplicate rows removed: {before-after}")
@@ -131,6 +134,12 @@ if df is not None:
             X,
             scale_map[scaling_method]
         )
+
+        # Store preprocessing objects for model reuse
+        st.session_state["encoders"] = encoders
+        st.session_state["scaler"] = scaler
+        st.session_state["encoding_method"] = encoding_method
+        st.session_state["scaling_method"] = scaling_method
 
         # Train-test split
         X_train, X_test, y_train, y_test = split_dataset(
@@ -1884,6 +1893,161 @@ if df is not None:
                                 f"Unable to generate SHAP comparison: {e}"
                             )
 
+        # ============================================================
+        # SAVE SELECTED MODEL
+        # ============================================================
+
+        if "trained_model" in st.session_state:
+
+            st.header("Save Model")
+
+            st.write(
+                "Choose which model you want to save for future use."
+            )
+
+            # --------------------------------------------------------
+            # Available models
+            # --------------------------------------------------------
+
+            model_options = {
+                "Original Model": st.session_state["trained_model"]
+            }
+
+            # Add mitigated model if available
+            if "mitigated_model" in st.session_state:
+                mitigation_method = st.session_state.get(
+                    "mitigation_method",
+                    "Mitigated Model"
+                )
+
+                model_options[
+                    f"Mitigated Model ({mitigation_method})"
+                ] = st.session_state["mitigated_model"]
+
+            # --------------------------------------------------------
+            # Model selection
+            # --------------------------------------------------------
+
+            selected_model_name = st.selectbox(
+                "Select Model to Save",
+                list(model_options.keys())
+            )
+
+            selected_model = model_options[selected_model_name]
+
+            st.info(
+                f"Selected model: **{selected_model_name}**"
+            )
+
+            # --------------------------------------------------------
+            # Save model
+            # --------------------------------------------------------
+
+            if st.button("Save Selected Model"):
+
+                try:
+
+                    # ------------------------------------------------
+                    # Create model bundle
+                    # ------------------------------------------------
+
+                    model_bundle = {
+                        "model": selected_model,
+                        "model_name": selected_model_name,
+                        "task_type": st.session_state.get(
+                            "task_type",
+                            "Unknown"
+                        ),
+                        "target_column": st.session_state.get(
+                            "target_column",
+                            "Unknown"
+                        ),
+                        "sensitive_features": st.session_state.get(
+                            "sensitive_features",
+                            []
+                        ),
+                        "encoders": st.session_state.get(
+                            "encoders",
+                            None
+                        ),
+                        "scaler": st.session_state.get(
+                            "scaler",
+                            None
+                        ),
+                        "encoding_method": st.session_state.get(
+                            "encoding_method",
+                            "Unknown"
+                        ),
+                        "scaling_method": st.session_state.get(
+                            "scaling_method",
+                            "Unknown"
+                        ),
+                        "mitigation_method": st.session_state.get(
+                            "mitigation_method",
+                            "None"
+                        )
+                    }
+
+                    # ------------------------------------------------
+                    # Save filename
+                    # ------------------------------------------------
+
+                    safe_model_name = (
+                        selected_model_name
+                        .lower()
+                        .replace(" ", "_")
+                        .replace("(", "")
+                        .replace(")", "")
+                    )
+
+                    model_filename = (
+                        f"FairLens_{safe_model_name}.pkl"
+                    )
+
+                    # ------------------------------------------------
+                    # Save model locally
+                    # ------------------------------------------------
+
+                    joblib.dump(
+                        model_bundle,
+                        model_filename
+                    )
+
+                    # Store path in session state
+                    st.session_state[
+                        "saved_model_path"
+                    ] = model_filename
+
+                    st.session_state[
+                        "saved_model_name"
+                    ] = selected_model_name
+
+                    st.success(
+                        f"Model saved successfully as "
+                        f"`{model_filename}`"
+                    )
+
+                    # ------------------------------------------------
+                    # Download button
+                    # ------------------------------------------------
+
+                    with open(model_filename, "rb") as model_file:
+
+                        st.download_button(
+                            label="Download Saved Model",
+                            data=model_file,
+                            file_name=model_filename,
+                            mime="application/octet-stream"
+                        )
+
+                except Exception as e:
+
+                    st.error(
+                        f"Unable to save model: {e}"
+                    )
+
+
+        
         # ============================================================
         # PDF REPORT
         # ============================================================
