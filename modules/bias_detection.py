@@ -89,6 +89,84 @@ def equal_opportunity_difference(y_true, y_pred, sensitive_feature):
 
     return min(tpr_values.values()) - max(tpr_values.values())
 
+def equalized_odds_difference(y_true, y_pred, sensitive_feature):
+    """
+    Measures the difference in both True Positive Rate (TPR)
+    and False Positive Rate (FPR) between sensitive groups.
+
+    Equalized Odds requires both TPR and FPR to be similar
+    across groups.
+    """
+
+    data = pd.DataFrame({
+        "actual": y_true,
+        "prediction": y_pred,
+        "group": sensitive_feature
+    })
+
+    tpr_values = {}
+    fpr_values = {}
+
+    for group in data["group"].unique():
+
+        group_data = data[data["group"] == group]
+
+        # -------------------------
+        # True Positive Rate
+        # -------------------------
+        actual_positive = (
+            group_data["actual"] == 1
+        ).sum()
+
+        if actual_positive == 0:
+            tpr = 0.0
+        else:
+            true_positive = (
+                (group_data["actual"] == 1) &
+                (group_data["prediction"] == 1)
+            ).sum()
+
+            tpr = true_positive / actual_positive
+
+        # -------------------------
+        # False Positive Rate
+        # -------------------------
+        actual_negative = (
+            group_data["actual"] == 0
+        ).sum()
+
+        if actual_negative == 0:
+            fpr = 0.0
+        else:
+            false_positive = (
+                (group_data["actual"] == 0) &
+                (group_data["prediction"] == 1)
+            ).sum()
+
+            fpr = false_positive / actual_negative
+
+        tpr_values[group] = tpr
+        fpr_values[group] = fpr
+
+    if len(tpr_values) < 2:
+        return 0.0
+
+    tpr_difference = (
+        max(tpr_values.values()) -
+        min(tpr_values.values())
+    )
+
+    fpr_difference = (
+        max(fpr_values.values()) -
+        min(fpr_values.values())
+    )
+
+    # Equalized Odds difference considers both TPR and FPR
+    return max(
+        tpr_difference,
+        fpr_difference
+    )
+
 
 def group_accuracy(y_true, y_pred, sensitive_feature):
     #Instead of calculating one overall accuracy, it calculates accuracy for every sensitive group.
@@ -144,7 +222,14 @@ def classification_fairness_report(
                 y_true,
                 y_pred,
                 sensitive_feature
-            )
+            ),
+
+        "Equalized Odds":
+        equalized_odds_difference(
+            y_true,
+            y_pred,
+            sensitive_feature
+        )
     }
 
 
@@ -260,6 +345,16 @@ def detect_classification_bias(report):
     eo = abs(
         report["Equal Opportunity Difference"]
     )
+
+    eod = abs(
+        report["Equalized Odds"]
+    )
+
+    if eod > 0.10:
+        bias_detected = True
+        reasons.append(
+            "Significant difference in equalized odds between groups."
+        )
 
     if dp > 0.10:
         bias_detected = True

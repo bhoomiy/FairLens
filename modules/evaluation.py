@@ -51,3 +51,46 @@ def evaluate_regression_models(model,X_test,y_test):
         }
 
      return results
+
+def evaluate_classification_predictions(y_test, y_pred):
+    """
+    Evaluate classification performance using already-generated predictions.
+    Useful for evaluating mitigated model predictions.
+    """
+
+    labels = np.unique(y_test)
+
+    results = {
+        "accuracy": accuracy_score(y_test, y_pred),
+        "precision": precision_score(
+            y_test,
+            y_pred,
+            average="weighted",
+            zero_division=0
+        ),
+        "recall_score": recall_score(
+            y_test,
+            y_pred,
+            average="weighted",
+            zero_division=0
+        ),
+        "f1_score": f1_score(
+            y_test,
+            y_pred,
+            average="weighted",
+            zero_division=0
+        ),
+        "confusion_matrix": confusion_matrix(
+            y_test,
+            y_pred
+        ),
+        "classification_report": classification_report(
+            y_test,
+            y_pred,
+            output_dict=True,
+            zero_division=0
+        ),
+        "Labels": labels
+    }
+
+    return results

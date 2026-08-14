@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 from sklearn.metrics import accuracy_score,mean_absolute_error,mean_squared_error
 
@@ -10,12 +11,13 @@ from modules.preprocessing import (detect_missing_values,handle_missing_values,r
 from modules.model_training import (build_decision_tree_classifier,build_decision_tree_regressor,build_linear_regression,build_logistic_regression,
                                     build_random_forest_classifier,build_random_forest_regressor,build_xgboost_classifier,build_xgboost_regressor,
                                     detect_task_type)
-from modules.evaluation import evaluate_classification_models,evaluate_regression_models
+from modules.evaluation import evaluate_classification_models,evaluate_regression_models,evaluate_classification_predictions
 from modules.bias_detection import evaluate_fairness
 from modules.explainability import explain_model,create_shap_summary_plot,create_local_explanation
 from modules.recommendation import generate_recommendations
 from modules.bias_mitigation import (calculate_reweighing_weights,apply_reweighing,apply_exponentiated_gradient,apply_threshold_optimizer)
 from fairlearn.reductions import ExponentiatedGradient, DemographicParity
+from modules.report_generator import generate_pdf_report
 
 st.set_page_config(page_title="FairLens", layout="wide")
 
@@ -200,15 +202,35 @@ if df is not None:
 
             selected_function = algorithms[selected_algorithm]
 
-            model = selected_function(
-                st.session_state["X_train"],
-                st.session_state["y_train"]
-            )
+            if selected_algorithm == "XGBoost Classifier":
+
+                model, encoder = selected_function(
+                    st.session_state["X_train"],
+                    st.session_state["y_train"]
+                )
+
+                st.session_state["label_encoder"] = encoder
+
+            else:
+
+                model = selected_function(
+                    st.session_state["X_train"],
+                    st.session_state["y_train"]
+                )
 
             st.session_state["trained_model"] = model
             st.session_state["model_name"] = selected_algorithm
             st.session_state["task_type"] = task_type
-
+            # Clear previous mitigation results
+            for key in [
+                "mitigated_model",
+                "mitigated_predictions",
+                "mitigation_feature",
+                "mitigation_method",
+                "before_after_fairness",
+                "explanation_results"
+            ]:
+                st.session_state.pop(key, None)
             st.success(
                 f"{selected_algorithm} trained successfully!"
             )
@@ -220,14 +242,38 @@ if df is not None:
             X_test = st.session_state["X_test"]
             y_test = st.session_state["y_test"]
             task_type = st.session_state["task_type"]
+            st.session_state["report_model_name"] = (
+                st.session_state.get("model_name", "Unknown Model")
+            )
+
+            st.session_state["report_task_type"] = task_type
+
+            st.session_state["report_sensitive_features"] = (
+                st.session_state["sensitive_features"]
+            )
 
             if st.button("Evaluate Model"):
                 if task_type == "classification":
-                    results = evaluate_classification_models(
-                        model,
-                        X_test,
-                        y_test
-                    )
+
+                    if st.session_state.get("model_name") == "XGBoost Classifier":
+
+                        encoder = st.session_state["label_encoder"]
+
+                        y_test_encoded = encoder.transform(y_test)
+
+                        results = evaluate_classification_models(
+                            model,
+                            X_test,
+                            y_test_encoded
+                        )
+
+                    else:
+
+                        results = evaluate_classification_models(
+                            model,
+                            X_test,
+                            y_test
+                        )
 
                     st.session_state["evaluation_results"] = results
                     st.success(
@@ -423,9 +469,17 @@ if df is not None:
                     # ==================================================
                     # Run Fairness Engine
                     # ==================================================
+                    if (
+                        task_type == "classification"
+                        and st.session_state.get("model_name") == "XGBoost Classifier"
+                    ):
+                        encoder = st.session_state["label_encoder"]
+                        fairness_y_test = encoder.transform(y_test)
+                    else:
+                        fairness_y_test = y_test
 
                     fairness_results = evaluate_fairness(
-                        y_true=y_test,
+                        y_true=fairness_y_test,
                         y_pred=y_pred,
                         dataframe=sensitive_test,
                         sensitive_features=sensitive_features,
@@ -762,6 +816,8 @@ if df is not None:
                             f"Unable to generate local explanation: {e}"
                         )
 
+                
+
         # ============================================================
         # RECOMMENDATION ENGINE
         # ============================================================
@@ -980,6 +1036,10 @@ if df is not None:
                                 ] = mitigated_model
 
                                 st.session_state[
+                                    "base_model_for_shap"
+                                ] = model
+
+                                st.session_state[
                                     "mitigated_predictions"
                                 ] = mitigated_predictions
 
@@ -1071,6 +1131,10 @@ if df is not None:
                                 st.session_state[
                                     "mitigated_model"
                                 ] = mitigated_model
+
+                                st.session_state[
+                                    "base_model_for_shap"
+                                ] = model
 
                                 st.session_state[
                                     "mitigated_predictions"
@@ -1180,6 +1244,10 @@ if df is not None:
                                 ] = mitigated_model
 
                                 st.session_state[
+                                    "base_model_for_shap"
+                                ] = model
+
+                                st.session_state[
                                     "mitigated_predictions"
                                 ] = mitigated_predictions
 
@@ -1190,11 +1258,6 @@ if df is not None:
                                 st.session_state[
                                     "mitigation_method"
                                 ] = "Threshold Optimizer"
-
-                                # Store sensitive test values
-                                st.session_state[
-                                    "sensitive_test"
-                                ] = sensitive_test
 
                                 st.success(
                                     "Threshold Optimizer "
@@ -1331,6 +1394,16 @@ if df is not None:
 
             # Original predictions
             original_predictions = original_model.predict(X_test)
+            if (
+                task_type == "classification"
+                and st.session_state.get("model_name") == "XGBoost Classifier"
+            ):
+                encoder = st.session_state["label_encoder"]
+                fairness_y_test = encoder.transform(y_test)
+            else:
+                fairness_y_test = y_test
+
+            st.session_state["original_predictions"] = original_predictions
 
             # ========================================================
             # FAIRNESS COMPARISON
@@ -1339,15 +1412,25 @@ if df is not None:
             st.subheader("Fairness Comparison")
 
             original_results = evaluate_fairness(
-                y_test,
+                fairness_y_test,
                 original_predictions,
                 sensitive_test,
                 sensitive_features,
                 task_type
             )
+            if (
+                task_type == "classification"
+                and st.session_state.get("model_name") == "XGBoost Classifier"
+            ):
+                encoder = st.session_state["label_encoder"]
 
+                # Convert mitigated predictions to encoded labels
+                if mitigated_predictions.dtype.kind in ["U", "S", "O"]:
+                    mitigated_predictions = encoder.transform(
+                        mitigated_predictions
+                    )
             mitigated_results = evaluate_fairness(
-                y_test,
+                fairness_y_test,
                 mitigated_predictions,
                 sensitive_test,
                 sensitive_features,
@@ -1379,7 +1462,8 @@ if df is not None:
                         "Metric": [
                             "Demographic Parity Difference",
                             "Disparate Impact",
-                            "Equal Opportunity Difference"
+                            "Equal Opportunity Difference",
+                            "Equalized Odds"
                         ],
 
                         "Before Mitigation": [
@@ -1393,6 +1477,9 @@ if df is not None:
 
                             original_metrics[
                                 "Equal Opportunity Difference"
+                            ],
+                            original_metrics[
+                                "Equalized Odds"
                             ]
                         ],
 
@@ -1407,6 +1494,10 @@ if df is not None:
 
                             mitigated_metrics[
                                 "Equal Opportunity Difference"
+                            ],
+
+                            mitigated_metrics[
+                                "Equalized Odds"
                             ]
                         ]
                     })
@@ -1447,6 +1538,11 @@ if df is not None:
                     use_container_width=True
                 )
 
+                st.session_state["before_after_fairness"] = {
+                    "original": original_results,
+                    "mitigated": mitigated_results
+                }
+
             # ========================================================
             # MODEL PERFORMANCE COMPARISON
             # ========================================================
@@ -1455,30 +1551,51 @@ if df is not None:
 
             if task_type == "classification":
 
-                original_accuracy = accuracy_score(
-                    y_test,
-                    original_predictions
+                if (
+                    task_type == "classification"
+                    and st.session_state.get("model_name") == "XGBoost Classifier"
+                ):
+                    performance_y_test = st.session_state["label_encoder"].transform(
+                        y_test
+                    )
+                else:
+                    performance_y_test = y_test
+
+                original_performance = evaluate_classification_models(
+                    original_model,
+                    X_test,
+                    performance_y_test
                 )
 
-                mitigated_accuracy = accuracy_score(
-                    y_test,
+                # Mitigated model performance
+                mitigated_performance = evaluate_classification_predictions(
+                    performance_y_test,
                     mitigated_predictions
                 )
 
                 performance_df = pd.DataFrame({
-
                     "Metric": [
-                        "Accuracy"
+                        "Accuracy",
+                        "Precision",
+                        "Recall",
+                        "F1 Score"
                     ],
 
                     "Before Mitigation": [
-                        original_accuracy
+                        original_performance["accuracy"],
+                        original_performance["precision"],
+                        original_performance["recall_score"],
+                        original_performance["f1_score"]
                     ],
 
                     "After Mitigation": [
-                        mitigated_accuracy
+                        mitigated_performance["accuracy"],
+                        mitigated_performance["precision"],
+                        mitigated_performance["recall_score"],
+                        mitigated_performance["f1_score"]
                     ]
                 })
+
 
             else:
 
@@ -1529,9 +1646,474 @@ if df is not None:
                 use_container_width=True
             )
 
-        else:
+            st.subheader("Performance Metric Comparison")
 
-            st.info(
-                "Apply a mitigation strategy to view "
-                "the before vs after comparison."
+            performance_chart = performance_df.set_index("Metric")
+
+            st.bar_chart(
+                performance_chart[
+                    ["Before Mitigation", "After Mitigation"]
+                ]
             )
+
+            st.caption(
+                "Higher values indicate better classification performance "
+                "for Accuracy, Precision, Recall, and F1 Score."
+            )
+
+            st.subheader("Fairness Metric Comparison")
+
+            # Difference-based fairness metrics
+            difference_metrics = comparison[
+                comparison["Metric"].isin([
+                    "Demographic Parity Difference",
+                    "Equal Opportunity Difference",
+                    "Equalized Odds"
+                ])
+            ].set_index("Metric")
+
+            st.bar_chart(
+                difference_metrics[
+                    ["Before Mitigation", "After Mitigation"]
+                ]
+            )
+
+            st.caption(
+                "For these metrics, values closer to 0 indicate smaller "
+                "differences between sensitive groups."
+            )
+
+
+            # Disparate Impact
+            di_comparison = comparison[
+                comparison["Metric"] == "Disparate Impact"
+            ].set_index("Metric")
+
+            st.bar_chart(
+                di_comparison[
+                    ["Before Mitigation", "After Mitigation"]
+                ]
+            )
+
+            st.caption(
+                "For Disparate Impact, a value closer to 1 indicates "
+                "more equal treatment between groups."
+            )
+
+            # ========================================================
+            # SHAP COMPARISON
+            # ========================================================
+
+            if (
+                task_type == "classification"
+                and "mitigated_model" in st.session_state
+                and "mitigation_method" in st.session_state
+            ):
+
+                st.subheader("SHAP Comparison")
+
+                mitigation_method = st.session_state["mitigation_method"]
+
+                if st.button("Generate SHAP Comparison"):
+
+                    with st.spinner("Generating SHAP comparison..."):
+
+                        try:
+
+                            original_model = st.session_state["trained_model"]
+
+                            # ------------------------------------------------
+                            # ORIGINAL MODEL SHAP
+                            # ------------------------------------------------
+
+                            original_shap = explain_model(
+                                original_model,
+                                X_train,
+                                X_test
+                            )
+
+                            original_importance = (
+                                original_shap["feature_importance"]
+                                .copy()
+                            )
+
+                            original_importance = original_importance.rename(
+                                columns={
+                                    "SHAP Importance": "Before Mitigation"
+                                }
+                            )
+
+                            # =================================================
+                            # REWEIGHING
+                            # =================================================
+
+                            if mitigation_method == "Reweighing":
+
+                                mitigated_model = st.session_state[
+                                    "mitigated_model"
+                                ]
+
+                                mitigated_shap = explain_model(
+                                    mitigated_model,
+                                    X_train,
+                                    X_test
+                                )
+
+                                mitigated_importance = (
+                                    mitigated_shap["feature_importance"]
+                                    .copy()
+                                )
+
+                                mitigated_importance = (
+                                    mitigated_importance.rename(
+                                        columns={
+                                            "SHAP Importance":
+                                            "After Mitigation"
+                                        }
+                                    )
+                                )
+
+                                shap_comparison = (
+                                    original_importance.merge(
+                                        mitigated_importance,
+                                        on="Feature",
+                                        how="outer"
+                                    )
+                                    .fillna(0)
+                                )
+
+                                st.success(
+                                    "SHAP comparison generated for "
+                                    "the original and reweighted models."
+                                )
+
+                            # =================================================
+                            # THRESHOLD OPTIMIZER
+                            # =================================================
+
+                            elif mitigation_method == "Threshold Optimizer":
+
+                                st.info(
+                                    "Threshold Optimizer changes the decision "
+                                    "threshold rather than the underlying model. "
+                                    "Therefore, SHAP is generated for the "
+                                    "underlying model and the fairness impact "
+                                    "is evaluated separately."
+                                )
+
+                                shap_comparison = original_importance.copy()
+
+                                shap_comparison[
+                                    "After Mitigation"
+                                ] = shap_comparison[
+                                    "Before Mitigation"
+                                ]
+
+                            # =================================================
+                            # EXPONENTIATED GRADIENT
+                            # =================================================
+
+                            elif mitigation_method == "Exponentiated Gradient":
+
+                                st.info(
+                                    "Exponentiated Gradient uses a fairness-aware "
+                                    "prediction strategy that cannot be directly "
+                                    "explained by the standard SHAP explainer. "
+                                    "SHAP is therefore shown for the underlying "
+                                    "model, while fairness improvement is evaluated "
+                                    "using the mitigation metrics."
+                                )
+
+                                shap_comparison = original_importance.copy()
+
+                                shap_comparison[
+                                    "After Mitigation"
+                                ] = shap_comparison[
+                                    "Before Mitigation"
+                                ]
+
+                            else:
+
+                                st.warning(
+                                    "Unknown mitigation method selected."
+                                )
+
+                                shap_comparison = None
+
+                            # =================================================
+                            # DISPLAY COMPARISON
+                            # =================================================
+
+                            if shap_comparison is not None:
+
+                                st.dataframe(
+                                    shap_comparison,
+                                    use_container_width=True
+                                )
+
+                                st.subheader(
+                                    "SHAP Feature Importance Comparison"
+                                )
+
+                                shap_chart = (
+                                    shap_comparison
+                                    .set_index("Feature")
+                                )
+
+                                st.bar_chart(
+                                    shap_chart[
+                                        [
+                                            "Before Mitigation",
+                                            "After Mitigation"
+                                        ]
+                                    ]
+                                )
+
+                                st.caption(
+                                    "SHAP shows feature-level contribution "
+                                    "for the original model. For Reweighing, "
+                                    "the actual mitigated model is also explained. "
+                                    "For Threshold Optimizer and Exponentiated "
+                                    "Gradient, fairness and performance changes "
+                                    "are evaluated separately."
+                                )
+
+                        except Exception as e:
+
+                            st.error(
+                                f"Unable to generate SHAP comparison: {e}"
+                            )
+
+        # ============================================================
+        # PDF REPORT
+        # ============================================================
+
+        st.subheader("PDF Report")
+
+        if st.button("Generate PDF Report"):
+
+            try:
+
+                # --------------------------------------------------------
+                # Collect dataset information
+                # --------------------------------------------------------
+
+                processed_df = st.session_state.get("processed_df")
+
+                dataset_summary = {
+                    "Dataset Rows": (
+                        len(processed_df)
+                        if processed_df is not None
+                        else "Unknown"
+                    ),
+                    "Dataset Columns": (
+                        len(processed_df.columns)
+                        if processed_df is not None
+                        else "Unknown"
+                    ),
+                    "Target Column": st.session_state.get(
+                        "target_column",
+                        "Unknown"
+                    ),
+                    "Sensitive Features": st.session_state.get(
+                        "sensitive_features",
+                        []
+                    )
+                }
+
+                # --------------------------------------------------------
+                # Model information
+                # --------------------------------------------------------
+
+                model_name = st.session_state.get(
+                    "model_name",
+                    "Unknown Model"
+                )
+
+                report_task_type = st.session_state.get(
+                    "task_type",
+                    "Unknown"
+                )
+
+                report_sensitive_features = st.session_state.get(
+                    "sensitive_features",
+                    []
+                )
+
+                # --------------------------------------------------------
+                # Explainability
+                # --------------------------------------------------------
+
+                explanation_results = st.session_state.get(
+                    "explanation_results",
+                    {}
+                )
+
+                # --------------------------------------------------------
+                # Recommendations
+                # --------------------------------------------------------
+
+                recommendations = st.session_state.get(
+                    "recommendations",
+                    {}
+                )
+
+                # --------------------------------------------------------
+                # Fairness results
+                # --------------------------------------------------------
+
+                fairness_results = st.session_state.get(
+                    "fairness_results",
+                    {}
+                )
+
+                before_after_fairness = st.session_state.get(
+                    "before_after_fairness",
+                    {}
+                )
+
+                # --------------------------------------------------------
+                # Mitigation information
+                # --------------------------------------------------------
+
+                mitigated_model = st.session_state.get(
+                    "mitigated_model",
+                    None
+                )
+
+                if mitigated_model is not None:
+
+                    applied_mitigation = st.session_state.get(
+                        "mitigation_method",
+                        "Mitigation applied"
+                    )
+
+                else:
+
+                    applied_mitigation = "No mitigation applied"
+
+                # --------------------------------------------------------
+                # Determine bias severity
+                # --------------------------------------------------------
+
+                bias_severity = "No significant bias detected"
+
+                if fairness_results:
+
+                    # Collect numeric fairness values
+                    fairness_values = []
+
+                    if isinstance(fairness_results, dict):
+
+                        for value in fairness_results.values():
+
+                            if isinstance(value, (int, float)):
+
+                                fairness_values.append(abs(value))
+
+                    # Simple interpretation
+                    if fairness_values:
+
+                        max_bias = max(fairness_values)
+
+                        if max_bias >= 0.20:
+                            bias_severity = "High potential bias"
+
+                        elif max_bias >= 0.10:
+                            bias_severity = "Moderate potential bias"
+
+                        else:
+                            bias_severity = "Low / No significant bias"
+
+                # --------------------------------------------------------
+                # Final recommendation
+                # --------------------------------------------------------
+
+                if mitigated_model is not None:
+
+                    final_recommendation = (
+                        "A mitigation strategy was applied. Review the "
+                        "before and after fairness metrics together with "
+                        "model performance to determine whether the "
+                        "mitigated model provides an appropriate fairness "
+                        "and performance trade-off."
+                    )
+
+                elif recommendations:
+
+                    final_recommendation = (
+                        "FairLens recommends reviewing the detected group "
+                        "imbalance and applying an appropriate fairness "
+                        "mitigation strategy if necessary."
+                    )
+
+                else:
+
+                    final_recommendation = (
+                        "The model should be reviewed using both performance "
+                        "and fairness metrics before deployment."
+                    )
+
+                # --------------------------------------------------------
+                # Generate PDF
+                # --------------------------------------------------------
+
+                report_path = "FairLens_Bias_Audit_Report.pdf"
+
+                generate_pdf_report(
+                    file_path=report_path,
+
+                    dataset_summary=dataset_summary,
+
+                    model_name=model_name,
+
+                    task_type=report_task_type,
+
+                    performance_metrics=performance_df.to_dict(
+                        orient="records"
+                    ),
+
+                    sensitive_features=report_sensitive_features,
+
+                    fairness_metrics=(
+                        before_after_fairness
+                        if before_after_fairness
+                        else fairness_results
+                    ),
+
+                    explainability_summary=explanation_results,
+
+                    bias_severity=bias_severity,
+
+                    recommended_mitigation=recommendations,
+
+                    applied_mitigation=applied_mitigation,
+
+                    before_after_comparison={
+                        "Performance": performance_df.to_dict(
+                            orient="records"
+                        ),
+                        "Fairness": before_after_fairness
+                    },
+
+                    final_recommendation=final_recommendation
+                )
+
+                st.success(
+                    "PDF report generated successfully!"
+                )
+
+                with open(report_path, "rb") as pdf_file:
+
+                    st.download_button(
+                        label="Download PDF Report",
+                        data=pdf_file,
+                        file_name="FairLens_Bias_Audit_Report.pdf",
+                        mime="application/pdf"
+                    )
+
+            except Exception as e:
+
+                st.error(
+                    f"Unable to generate PDF report: {e}"
+                )
