@@ -1,0 +1,12 @@
+pandas
+numpy 
+scikit-learn
+fairlearn
+shap
+lime
+streamlit
+plotly
+flask
+reportlab
+xgboost
+seaborn
