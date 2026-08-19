@@ -10,3 +10,6 @@ flask
 reportlab
 xgboost
 seaborn
+flask-cors
+gunicorn
+joblib  
