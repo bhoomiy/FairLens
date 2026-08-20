@@ -14,7 +14,7 @@ export const Route = createFileRoute("/bias")({
   component: BiasPage,
 });
 
-const API_URL = "http://127.0.0.1:5000";
+const API_URL = "https://fairlens-amnt.onrender.com/";
 
 type BiasResult = {
   ok: boolean;

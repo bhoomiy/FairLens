@@ -5,7 +5,7 @@ export const Route = createFileRoute("/mitigation")({
   component: MitigationPage,
 });
 
-const API_URL = "http://127.0.0.1:5000";
+const API_URL = "https://fairlens-amnt.onrender.com/";
 const sensitiveFeatures =
   JSON.parse(
     localStorage.getItem("fairlens_sensitive_features") || "[]"

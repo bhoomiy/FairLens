@@ -5,7 +5,7 @@ export const Route = createFileRoute("/upload")({
   component: UploadPage,
 });
 
-const API_URL = "http://127.0.0.1:5000";
+const API_URL = "https://fairlens-amnt.onrender.com/";
 
 type UploadResult = {
   session_id: string;

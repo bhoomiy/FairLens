@@ -196,12 +196,11 @@ http://localhost:8080
 The Flask API will normally run at:
 
 ```text
-http://127.0.0.1:5000
-```
+https://fairlens-amnt.onrender.com/```
 To check if backend is working use:
 
 ```text
-http://127.0.0.1:5000/api/health
+https://fairlens-amnt.onrender.com/api/health
 ```
 ---
 
