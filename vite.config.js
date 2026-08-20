@@ -8,16 +8,19 @@ export default defineViteConfig(async (env) => {
       server: { entry: "server" },
     },
 
-    // Disable Lovable's built-in Nitro target
     nitro: false,
   })(env);
 
-  // For production builds, explicitly build for Vercel
   if (env.command === "build") {
     config.plugins = [
       ...(config.plugins ?? []),
       nitro({
         preset: "vercel",
+        output: {
+          dir: ".vercel/output",
+          serverDir: ".vercel/output/functions/__server.func",
+          publicDir: ".vercel/output/static",
+        },
       }),
     ];
   }
