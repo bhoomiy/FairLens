@@ -334,8 +334,7 @@ const handlePreprocess = async () => {
    */
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-16">
-
+<main className="mx-auto w-full max-w-7xl px-6 py-16">
       {/* ====================================================== */}
       {/* HEADER                                                  */}
       {/* ====================================================== */}
